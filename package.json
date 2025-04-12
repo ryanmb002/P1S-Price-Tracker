@@ -1,0 +1,14 @@
+{
+    "name": "bambu-checker",
+    "version": "1.0.0",
+    "main": "index.js",
+    "scripts": {
+        "start": "node tracker.js",
+        "postinstall": "puppeteer install"
+    },
+    "dependencies": {
+        "axios": "^1.6.0",
+        "node-cron": "^3.0.2",
+        "puppeteer": "^22.8.2"
+    }
+}
