@@ -9,111 +9,125 @@ const bambuURL = "https://us.store.bambulab.com/products/p1s?id=5838558747395072
 const discordWebhook = process.env.DISCORD_WEBHOOK;
 
 // === CONFIG ===
-const runHeadless = false; // false to debug
-const checkInterval = "*/15 * * * *"; // every minute
+const runHeadless = true;
+const checkInterval = "*/15 * * * *"; // every 15 minutes
 
-// Store last known status and price
-let lastStatus = null;
-let lastPrice = null;
-
-// Flag to track if Bambu Lab has been checked before for sample message
+// State initialization
+let lastStatusBestBuy = null;
+let lastStatusBambu = null;
+let lastPriceBestBuy = null;
+let lastPriceBambu = null;
+let hasCheckedBestBuyBefore = false;
 let hasCheckedBambuBefore = false;
 
 async function checkP1SStock() {
   const browser = await puppeteer.launch({
-    headless: true,
+    headless: runHeadless,
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
   });
 
   const page = await browser.newPage();
 
   try {
-    // === Check BestBuy stock status ===
-    await page.goto(bestBuyURL, {
-      waitUntil: "domcontentloaded",
-      timeout: 0,
-    });
-
+    // === Check BestBuy ===
+    await page.goto(bestBuyURL, { waitUntil: "domcontentloaded", timeout: 0 });
     await page.waitForSelector('[data-testid="customer-price"]', { timeout: 5000 });
     await page.waitForSelector('.add-to-cart-button', { timeout: 5000 });
 
     const rawPriceBestBuy = await page.$eval('[data-testid="customer-price"]', el => el.innerText.trim());
     const priceMatchBestBuy = rawPriceBestBuy.match(/\$\d+[\.,]?\d*/);
     let priceBestBuy = priceMatchBestBuy ? priceMatchBestBuy[0] : "N/A";
-    priceBestBuy = parseFloat(priceBestBuy.replace('$', '').replace(',', '')).toFixed(2); // Ensure two decimal places
+    priceBestBuy = parseFloat(priceBestBuy.replace('$', '').replace(',', '')).toFixed(2);
     priceBestBuy = `$${priceBestBuy}`;
 
-    // Look for 'Add to Cart' to determine if in stock
     const buttonTextBestBuy = await page.$eval('.add-to-cart-button', el => el.textContent.trim().toLowerCase());
     const isInStockBestBuy = buttonTextBestBuy.includes("add to cart");
 
     const newStatusBestBuy = isInStockBestBuy ? "in" : "out";
 
-    if (newStatusBestBuy !== lastStatus) {
-      lastStatus = newStatusBestBuy;
+    if (newStatusBestBuy !== lastStatusBestBuy) {
+      lastStatusBestBuy = newStatusBestBuy;
 
-      const statusTextBestBuy = isInStockBestBuy
-        ? `🚨🤩 **BestBuy: Bambu Lab P1S Combo is IN STOCK!**\n💰 Price: **${priceBestBuy}**\n🔗 [Buy Now](${bestBuyURL})`
-        : `🚨😢 **BestBuy: Bambu Lab P1S Combo is NOW OUT OF STOCK!**\n💰 Price Was: **${priceBestBuy}**\n🔗 [Link to Store](${bestBuyURL})`;
-      await axios.post(discordWebhook, {
-        content: `${statusTextBestBuy}`,
-      });
+      const statusText = isInStockBestBuy
+        ? `🚨🤩 **BestBuy: P1S Combo is now IN STOCK!**\n💰 Price: **${priceBestBuy}**\n🔗 [Buy Now](${bestBuyURL})`
+        : `🚨😢 **BestBuy: P1S Combo is now OUT OF STOCK!**\n💰 Price Was: **${priceBestBuy}**\n🔗 [Link to Store](${bestBuyURL})`;
 
+      await axios.post(discordWebhook, { content: statusText });
       console.log(`[${new Date().toLocaleTimeString()}] 📣 BestBuy status changed — alert sent (${newStatusBestBuy.toUpperCase()}).`);
     } else {
       console.log(`[${new Date().toLocaleTimeString()}] ℹ️ BestBuy — no change in stock status.`);
     }
 
-    // === Add delay before checking Bambu Lab ===
+    // === BestBuy: Initial Check & Price Alerts ===
+    if (!hasCheckedBestBuyBefore) {
+      await axios.post(discordWebhook, {
+        content: `🚨🙂 **BestBuy: P1S Combo Initial Check**\n💰 Price: **${priceBestBuy}**\n🔗 [Buy Now](${bestBuyURL})`,
+      });
+
+      hasCheckedBestBuyBefore = true;
+      console.log(`[${new Date().toLocaleTimeString()}] 📣 Sample price message sent for BestBuy P1S Combo.`);
+    }
+
+    if (lastPriceBestBuy && priceBestBuy !== lastPriceBestBuy) {
+      const oldPrice = parseFloat(lastPriceBestBuy.replace('$', '').replace(',', ''));
+      const newPrice = parseFloat(priceBestBuy.replace('$', '').replace(',', ''));
+
+      const emoji = newPrice < oldPrice ? "🤩" : "😢";
+      const changeType = newPrice < oldPrice ? "Price Decrease" : "Price Increase";
+
+      await axios.post(discordWebhook, {
+        content: `🚨${emoji} **BestBuy: ${changeType} for P1S Combo** \n💰 New Price: **${priceBestBuy}**\n🔗 [Buy Now](${bestBuyURL})`,
+      });
+
+      console.log(`[${new Date().toLocaleTimeString()}] 📣 BestBuy price ${changeType.toLowerCase()} alert sent!`);
+    } else if (lastPriceBestBuy === priceBestBuy) {
+      console.log(`[${new Date().toLocaleTimeString()}] ℹ️ BestBuy price unchanged.`);
+    }
+
+    lastPriceBestBuy = priceBestBuy;
+
+    // === Delay before checking Bambu ===
     console.log(`[${new Date().toLocaleTimeString()}] ⏳ Waiting before checking Bambu Lab...`);
-    await new Promise(resolve => setTimeout(resolve, 5000)); // 5 seconds delay between checks
+    await new Promise(resolve => setTimeout(resolve, 5000));
 
-    // === Check Bambu Lab store price ===
-    await page.goto(bambuURL, {
-      waitUntil: "domcontentloaded",
-      timeout: 0,
-    });
+    // === Check Bambu ===
+    await page.goto(bambuURL, { waitUntil: "domcontentloaded", timeout: 0 });
+    await page.waitForSelector("#info-wrapper span", { timeout: 5000 });
 
-    await page.waitForSelector("#info-wrapper > div > div.Product__InfoWrapper > div > div > form > div.ProductMeta > div.\\!mt-3.Heading.flex.items-center.justify-center.md\\:justify-start > div > span", { timeout: 5000 });
-
-    // Extract the price from the specified selector
-    const rawPriceBambu = await page.$eval("#info-wrapper > div > div.Product__InfoWrapper > div > div > form > div.ProductMeta > div.\\!mt-3.Heading.flex.items-center.justify-center.md\\:justify-start > div > span", el => el.innerText.trim());
-    let priceMatchBambu = rawPriceBambu.match(/\$\d+[\.,]?\d*/);
+    const rawPriceBambu = await page.$eval("#info-wrapper span", el => el.innerText.trim());
+    const priceMatchBambu = rawPriceBambu.match(/\$\d+[\.,]?\d*/);
     let priceBambu = priceMatchBambu ? priceMatchBambu[0] : "N/A";
-    priceBambu = parseFloat(priceBambu.replace('$', '').replace(',', '')).toFixed(2); // Ensure two decimal places
+    priceBambu = parseFloat(priceBambu.replace('$', '').replace(',', '')).toFixed(2);
     priceBambu = `$${priceBambu}`;
 
     console.log(`[${new Date().toLocaleTimeString()}] 🌍 Bambu store price: ${priceBambu}`);
-    
-    // If it's the first time checking Bambu, send a sample message
+
     if (!hasCheckedBambuBefore) {
       await axios.post(discordWebhook, {
-        content: `🚨🙂 **Initial Check: Bambu Lab P1S Combo Price**\n💰 Price: **${priceBambu}**\n🔗 [Buy Now](${bambuURL})`,
+        content: `🚨🙂 **Bambu Lab: P1S Combo Initial Check**\n💰 Price: **${priceBambu}**\n🔗 [Buy Now](${bambuURL})`,
       });
 
       hasCheckedBambuBefore = true;
       console.log(`[${new Date().toLocaleTimeString()}] 📣 Sample price message sent for Bambu Lab P1S Combo.`);
     }
 
-    // Check for price change from lastPrice
-    if (lastPrice && priceBambu !== lastPrice) {
-        const oldPrice = parseFloat(lastPrice.replace('$', '').replace(',', ''));
-        const newPrice = parseFloat(priceBambu.replace('$', '').replace(',', ''));
-      
-        const emoji = newPrice < oldPrice ? "🤩" : "😢";
-        const changeType = newPrice < oldPrice ? "Price Decrease" : "Price Increase";
-      
-        await axios.post(discordWebhook, {
-          content: `🚨 **${changeType}: Bambu Lab P1S Combo** ${emoji}\n💰 New Price: **${priceBambu}**\n🔗 [Buy Now](${bambuURL})`,
-        });
-      
-        console.log(`[${new Date().toLocaleTimeString()}] 📣 Price ${changeType.toLowerCase()} alert sent!`);
-      } else if (lastPrice === priceBambu) {
-        console.log(`[${new Date().toLocaleTimeString()}] ℹ️ Price unchanged.`);
-      }
+    if (lastPriceBambu && priceBambu !== lastPriceBambu) {
+      const oldPrice = parseFloat(lastPriceBambu.replace('$', '').replace(',', ''));
+      const newPrice = parseFloat(priceBambu.replace('$', '').replace(',', ''));
 
-    // Update the stored price with the latest value
-    lastPrice = priceBambu;
+      const emoji = newPrice < oldPrice ? "🤩" : "😢";
+      const changeType = newPrice < oldPrice ? "Price Decrease" : "Price Increase";
+
+      await axios.post(discordWebhook, {
+        content: `🚨${emoji} **Bambu Lab: ${changeType} for P1S Combo** \n💰 New Price: **${priceBambu}**\n🔗 [Buy Now](${bambuURL})`,
+      });
+
+      console.log(`[${new Date().toLocaleTimeString()}] 📣 Bambu Lab price ${changeType.toLowerCase()} alert sent!`);
+    } else if (lastPriceBambu === priceBambu) {
+      console.log(`[${new Date().toLocaleTimeString()}] ℹ️ Bambu Lab price unchanged.`);
+    }
+
+    lastPriceBambu = priceBambu;
 
   } catch (err) {
     console.error(`[${new Date().toLocaleTimeString()}] ❗ Error checking stock or price:`, err.message);
@@ -122,5 +136,8 @@ async function checkP1SStock() {
   }
 }
 
+// Run once at start
 checkP1SStock();
+
+// Schedule recurring checks
 cron.schedule(checkInterval, checkP1SStock);
